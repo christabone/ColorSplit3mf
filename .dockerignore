@@ -1,0 +1,7 @@
+.git
+.github
+content
+output
+*.3mf
+__pycache__
+*.pyc
