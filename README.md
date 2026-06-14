@@ -128,6 +128,43 @@ Outputs are named by colour, e.g. `model_filament2_yellow_FFFF00.stl`, plus a
 split before printing. `--info` also reports palette colours that were defined
 but never actually painted.
 
+This default (surface) mode partitions the outer **skin** by colour, so each part
+is an open shell — slicers will ask you to "fix model". For printable solids, use
+`--solid` below.
+
+### Solid mode (`--solid`) — watertight, glue-ready parts
+
+A painted model is one solid with colour on its *surface*. Splitting the surface
+gives open shells. `--solid` instead splits the **volume**: each colour becomes a
+**solid, watertight** mesh, and because adjacent colours share the same boundary,
+the parts fit together (glue them after printing — no AMS needed). No manual
+"fix model" in the slicer.
+
+How it works: voxelize + fill the solid → label each interior voxel by its nearest
+painted-surface colour → majority-smooth the labels (removes interior noise) →
+marching cubes per colour → `fix_normals`, with `pymeshfix` as a fallback for the
+rare non-watertight body.
+
+```bash
+python color_split_bambu.py model.3mf -o output --solid --resolution 250
+```
+
+Produces, per colour: `model_filamentN_<name>_<hex>_solid.stl` (watertight solids
+in original coordinates, so they assemble), plus `model_plate.3mf` — every colour
+dropped to the bed and arranged side-by-side, ready to print — and a colour
+`model_plate_preview.glb`.
+
+- `--resolution N` voxels along the longest axis (default 250; higher = finer
+  surface but slower — the outer surface is re-meshed at this resolution). 250 on a
+  ~24 mm model is ~0.1 mm detail and takes a few minutes (the nearest-colour step
+  dominates).
+- `--min-faces N` drops tiny artifact bodies (default 200). `--smooth-iters N`
+  controls interior label smoothing (default 2). `--no-arrange` skips the plate 3MF.
+
+> Caveat: the outer surface is voxel-re-meshed (slight fidelity loss vs. the
+> original), and volume is conserved to within a few percent (half-voxel surface
+> inflation). For exact-surface (but open) parts, use the default mode.
+
 ### Run with Docker (no local Python needed)
 
 ```bash
@@ -140,12 +177,23 @@ docker run --rm -u "$(id -u):$(id -g)" \
 ```
 
 The image is `python:3.12-slim` plus `trimesh`, `numpy`, `scipy`, `networkx`,
-`lxml` (no `open3d`), so it stays small and builds in seconds.
+`lxml` (surface mode) and `scikit-image` + `pymeshfix` (for `--solid`). No
+`open3d`/`scikit-learn`/`matplotlib`, so it stays ~430 MB and builds in seconds.
+Add `--solid --resolution 250` to the `docker run` for solid parts.
 
 ### Tests
 
 ```bash
-python -m unittest discover -s tests
+# pure parsing/decode tests (stdlib only)
+python -m unittest discover -s tests -p 'test_bambu_paint.py'
 # optional regression against a local sample:
-SAMPLE_3MF=/path/to/model.3mf python -m unittest discover -s tests
+SAMPLE_3MF=/path/to/model.3mf python -m unittest discover -s tests -p 'test_bambu_paint.py'
+```
+
+`tests/test_bambu_solid.py` covers the volumetric helpers and needs numpy + scipy,
+so run it inside the Docker image:
+
+```bash
+docker run --rm -v "$PWD":/work -w /work --entrypoint python colorsplit3mf \
+  -m unittest discover -s tests
 ```

@@ -130,6 +130,58 @@ def export_preview(mesh, groups, stem, outdir):
     return path
 
 
+def export_solid(mesh, codes, groups, stem, outdir, fmt,
+                 resolution, smooth_iters, min_faces, arrange):
+    """Volumetric mode: solid, watertight, mutually-fitting parts per colour."""
+    import bambu_solid as bsolid
+    group_codes = [g.code for g in groups]
+    logger.info("Volumetric split @resolution=%d (voxelize + label + marching cubes "
+                "+ repair; this can take a minute)...", resolution)
+    result, pitch = bsolid.solid_color_split(mesh, list(codes), group_codes,
+                                             resolution=resolution, smooth_iters=smooth_iters,
+                                             min_faces=min_faces)
+    out = Path(outdir); out.mkdir(parents=True, exist_ok=True)
+    logger.info("voxel pitch ~%.3f (model units)", pitch)
+    color_meshes = []
+    for g in groups:
+        bodies = result.get(g.code, [])
+        if not bodies:
+            logger.info("  %-7s: no solid bodies (skipped)", g.name); continue
+        combined = trimesh.util.concatenate(bodies) if len(bodies) > 1 else bodies[0]
+        combined.visual.face_colors = np.tile(_hex_to_rgba(g.color_hex),
+                                              (len(combined.faces), 1)).astype(np.uint8)
+        fn = out / f"{stem}_filament{g.extruder}_{g.name}_{g.color_hex.lstrip('#')}_solid.{fmt}"
+        combined.export(str(fn))
+        logger.info("  %-7s: %d bodies  %7d faces  watertight=%s  vol=%.1f  -> %s",
+                    g.name, len(bodies), len(combined.faces), combined.is_watertight,
+                    combined.volume, fn.name)
+        color_meshes.append((g, combined))
+    if arrange and color_meshes:
+        _export_plate(color_meshes, stem, out)
+    return color_meshes
+
+
+def _export_plate(color_meshes, stem, outdir):
+    """Drop each colour object to the bed and tile them on a plate -> .3mf + .glb."""
+    import bambu_solid as bsolid
+    dropped, footprints = [], []
+    for g, m in color_meshes:
+        mm = m.copy()
+        mm.apply_translation([0, 0, -mm.bounds[0][2]])      # drop so min z = 0
+        b = mm.bounds
+        footprints.append((b[0][0], b[0][1], b[1][0], b[1][1]))
+        dropped.append((g, mm))
+    scene = trimesh.Scene()
+    for (g, mm), (dx, dy) in zip(dropped, bsolid.grid_positions(footprints, gap=5.0)):
+        mm = mm.copy(); mm.apply_translation([dx, dy, 0.0])
+        scene.add_geometry(mm, geom_name=f"{g.name}_filament{g.extruder}")
+    p3mf = Path(outdir) / f"{stem}_plate.3mf"
+    pglb = Path(outdir) / f"{stem}_plate_preview.glb"
+    scene.export(str(p3mf)); scene.export(str(pglb))
+    logger.info("  plate: %d objects dropped to bed & arranged -> %s , %s",
+                len(dropped), p3mf.name, pglb.name)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Split a Bambu/Orca multi-color 3MF by filament colour")
     parser.add_argument("input_file", help="Input 3MF file path")
@@ -138,6 +190,18 @@ def main():
                         help="Mesh export format (default: stl)")
     parser.add_argument("--info", action="store_true", help="Show colour info only; export nothing")
     parser.add_argument("--no-preview", action="store_true", help="Skip the colour preview .glb")
+    parser.add_argument("--solid", action="store_true",
+                        help="Volumetric mode: emit SOLID, watertight, mutually-fitting parts "
+                             "(no slicer 'fix model' needed). Requires scikit-image + pymeshfix.")
+    parser.add_argument("--resolution", type=int, default=250,
+                        help="--solid voxel resolution along the longest axis "
+                             "(default 250; higher = finer surface, slower)")
+    parser.add_argument("--smooth-iters", type=int, default=2,
+                        help="--solid interior label-smoothing passes (default 2)")
+    parser.add_argument("--min-faces", type=int, default=200,
+                        help="--solid: drop bodies smaller than this many faces (artifact removal)")
+    parser.add_argument("--no-arrange", action="store_true",
+                        help="--solid: skip the combined plate-arranged 3MF")
     args = parser.parse_args()
 
     if not Path(args.input_file).exists():
@@ -153,6 +217,12 @@ def main():
         return
 
     stem = Path(args.input_file).stem
+    if args.solid:
+        export_solid(mesh, codes, groups, stem, args.output, args.format,
+                     args.resolution, args.smooth_iters, args.min_faces, not args.no_arrange)
+        logger.info("Done (solid mode). Output in %s/", args.output)
+        return
+
     export_splits(mesh, groups, stem, args.output, args.format)
     if not args.no_preview:
         export_preview(mesh, groups, stem, args.output)
