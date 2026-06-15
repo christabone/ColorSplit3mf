@@ -193,9 +193,10 @@ def main():
     parser.add_argument("--solid", action="store_true",
                         help="Volumetric mode: emit SOLID, watertight, mutually-fitting parts "
                              "(no slicer 'fix model' needed). Requires scikit-image + pymeshfix.")
-    parser.add_argument("--resolution", type=int, default=250,
+    parser.add_argument("--resolution", type=int, default=300,
                         help="--solid voxel resolution along the longest axis "
-                             "(default 250; higher = finer surface, slower)")
+                             "(default 300; higher = finer surface + bigger files). "
+                             "EDT labelling makes even 400-500 take under a minute.")
     parser.add_argument("--smooth-iters", type=int, default=2,
                         help="--solid interior label-smoothing passes (default 2)")
     parser.add_argument("--min-faces", type=int, default=200,
