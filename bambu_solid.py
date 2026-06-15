@@ -73,41 +73,8 @@ def _repair_component(c):
     return c
 
 
-def label_kdtree(filled, vg, cent, flab):
-    """Reference labeller: every solid voxel -> nearest face-centroid colour.
-
-    Exact but slow: O(n_voxels * log n_faces) brute-force nearest neighbour.
-    """
-    import trimesh
-    from scipy.spatial import cKDTree
-    occ = np.argwhere(filled)
-    occ_world = trimesh.transform_points(occ.astype(np.float64), vg.transform)
-    _, nn = cKDTree(cent).query(occ_world, k=1, workers=-1)
-    lab = np.zeros(filled.shape, np.int32)
-    lab[occ[:, 0], occ[:, 1], occ[:, 2]] = flab[nn]
-    return lab
-
-
-def label_edt(filled, vg, cent, flab):
-    """Fast labeller: rasterize surface colours onto the grid, then a single
-    Euclidean distance transform propagates the nearest colour to every voxel.
-
-    Same "nearest painted colour" answer as label_kdtree, on the same grid, but
-    O(n_voxels) and seconds instead of minutes. Distance is measured to the
-    nearest coloured *voxel* rather than the nearest face centroid -- a sub-voxel
-    difference that is below the marching-cubes output resolution.
-    """
-    idx = np.clip(vg.points_to_indices(cent), 0, np.array(filled.shape) - 1)
-    seed = np.zeros(filled.shape, np.int32)
-    seed[idx[:, 0], idx[:, 1], idx[:, 2]] = flab          # last face in a voxel wins
-    inds = ndimage.distance_transform_edt(seed == 0, return_distances=False,
-                                          return_indices=True)
-    nearest = seed[tuple(inds)]
-    return np.where(filled, nearest, 0).astype(np.int32)
-
-
 def solid_color_split(mesh, face_codes, group_codes,
-                      resolution=300, smooth_iters=2, min_faces=200, method="edt"):
+                      resolution=250, smooth_iters=2, min_faces=200):
     """Segment a solid mesh into watertight solid bodies per colour.
 
     mesh:        trimesh.Trimesh (the original solid)
@@ -117,6 +84,7 @@ def solid_color_split(mesh, face_codes, group_codes,
     (trimesh.Trimesh) in the mesh's original coordinate frame.
     """
     import trimesh
+    from scipy.spatial import cKDTree
     from skimage import measure
 
     V = np.asarray(mesh.vertices)
@@ -129,8 +97,11 @@ def solid_color_split(mesh, face_codes, group_codes,
     vg = mesh.voxelized(pitch)
     filled = ndimage.binary_fill_holes(vg.matrix)
 
-    labeller = label_kdtree if method == "kdtree" else label_edt
-    lab = labeller(filled, vg, cent, flab)
+    occ = np.argwhere(filled)
+    occ_world = trimesh.transform_points(occ.astype(np.float64), vg.transform)
+    _, nn = cKDTree(cent).query(occ_world, k=1, workers=-1)
+    lab = np.zeros(filled.shape, np.int32)
+    lab[occ[:, 0], occ[:, 1], occ[:, 2]] = flab[nn]
     lab = smooth_labels(lab, filled, len(group_codes), smooth_iters)
 
     result = {}

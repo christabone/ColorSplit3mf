@@ -141,14 +141,12 @@ the parts fit together (glue them after printing — no AMS needed). No manual
 "fix model" in the slicer.
 
 How it works: voxelize + fill the solid → label each interior voxel by its nearest
-painted-surface colour (a single Euclidean **distance transform**,
-`scipy.ndimage.distance_transform_edt` — ~300× faster than brute-force nearest
-neighbour and a standard segmentation technique) → majority-smooth the labels
-(removes interior noise) → marching cubes per colour → `fix_normals`, with
-`pymeshfix` as a fallback for the rare non-watertight body.
+painted-surface colour → majority-smooth the labels (removes interior noise) →
+marching cubes per colour → `fix_normals`, with `pymeshfix` as a fallback for the
+rare non-watertight body.
 
 ```bash
-python color_split_bambu.py model.3mf -o output --solid --resolution 300
+python color_split_bambu.py model.3mf -o output --solid --resolution 250
 ```
 
 Produces, per colour: `model_filamentN_<name>_<hex>_solid.stl` (watertight solids
@@ -156,17 +154,12 @@ in original coordinates, so they assemble), plus `model_plate.3mf` — every col
 dropped to the bed and arranged side-by-side, ready to print — and a colour
 `model_plate_preview.glb`.
 
-- `--resolution N` voxels along the longest axis (default 300; higher = finer
-  surface but **bigger files** — the outer surface is re-meshed at this resolution).
-  On the bee, 300 ≈ 35 s and ~40 MB/colour; 400 ≈ 55 s and ~75 MB/colour. Past ~300
-  the detail is finer than a typical nozzle resolves for a ~60 mm print.
+- `--resolution N` voxels along the longest axis (default 250; higher = finer
+  surface but slower — the outer surface is re-meshed at this resolution). 250 on a
+  ~24 mm model is ~0.1 mm detail and takes a few minutes (the nearest-colour step
+  dominates).
 - `--min-faces N` drops tiny artifact bodies (default 200). `--smooth-iters N`
   controls interior label smoothing (default 2). `--no-arrange` skips the plate 3MF.
-
-> Note: the distance-transform labeller and a brute-force KDTree labeller agree on
-> **99%+ of the visible outer surface**; they differ only on hidden *interior* cut
-> placement (the medial surface between colours is genuinely ambiguous), which
-> shifts per-colour volume a few percent but doesn't change the printed result.
 
 > Caveat: the outer surface is voxel-re-meshed (slight fidelity loss vs. the
 > original), and volume is conserved to within a few percent (half-voxel surface
