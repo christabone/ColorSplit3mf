@@ -128,6 +128,13 @@ Outputs are named by colour, e.g. `model_filament2_yellow_FFFF00.stl`, plus a
 split before printing. `--info` also reports palette colours that were defined
 but never actually painted.
 
+Tiny disconnected fragments (< 200 faces) are dropped from each colour to remove
+the stray speck artifacts that surface splitting leaves at paint boundaries
+(mostly in the unpainted/base group). Tune with `--min-faces N` — `0` disables
+it, and a larger value also removes thin boundary seams (keeping only the big
+parts, e.g. just the wings). These splits are open shells, so run your slicer's
+"fix model" / repair on them before printing.
+
 ### Run with Docker (no local Python needed)
 
 ```bash

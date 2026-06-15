@@ -94,16 +94,39 @@ def report(groups, palette, total_faces):
                     ", ".join(f"{c} ({bp.color_name(c)})" for c in unused))
 
 
-def export_splits(mesh, groups, stem, outdir, fmt):
+def _clean_faces(mesh, faces, min_faces):
+    """Submesh for `faces`, dropping tiny disconnected fragments (< min_faces).
+
+    Surface splitting leaves stray slivers where a paint brush didn't perfectly
+    cover an edge (especially in the unpainted/base group), which show up as
+    little floating specks in the slicer. Removing the small connected
+    components keeps the real parts (e.g. the wings) and drops the confetti.
+    """
+    sub = mesh.submesh([faces], append=True)
+    if min_faces <= 0:
+        return sub, 0
+    comps = sub.split(only_watertight=False)
+    small = [c for c in comps if len(c.faces) < min_faces]
+    if len(comps) <= 1 or not small:
+        return sub, 0                  # nothing to drop -> return the submesh untouched
+    keep = [c for c in comps if len(c.faces) >= min_faces]
+    if not keep:                       # never drop everything -- keep the largest body
+        keep = [max(comps, key=lambda c: len(c.faces))]
+    cleaned = trimesh.util.concatenate(keep) if len(keep) > 1 else keep[0]
+    return cleaned, len(comps) - len(keep)
+
+
+def export_splits(mesh, groups, stem, outdir, fmt, min_faces=200):
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
     written = []
     for g in groups:
-        sub = mesh.submesh([g.faces], append=True)
+        cleaned, dropped = _clean_faces(mesh, g.faces, min_faces)
         fname = f"{stem}_filament{g.extruder}_{g.name}_{g.color_hex.lstrip('#')}.{fmt}"
         path = out / fname
-        sub.export(str(path))
-        logger.info("Exported %s (%d faces)", path, g.face_count)
+        cleaned.export(str(path))
+        note = f"  (dropped {dropped} speck bodies <{min_faces} faces)" if dropped else ""
+        logger.info("Exported %s (%d faces)%s", path, len(cleaned.faces), note)
         written.append(path)
     return written
 
@@ -138,6 +161,9 @@ def main():
                         help="Mesh export format (default: stl)")
     parser.add_argument("--info", action="store_true", help="Show colour info only; export nothing")
     parser.add_argument("--no-preview", action="store_true", help="Skip the colour preview .glb")
+    parser.add_argument("--min-faces", type=int, default=200,
+                        help="Drop disconnected fragments smaller than this many faces "
+                             "(removes tiny speck artifacts; default 200, 0 disables)")
     args = parser.parse_args()
 
     if not Path(args.input_file).exists():
@@ -153,7 +179,7 @@ def main():
         return
 
     stem = Path(args.input_file).stem
-    export_splits(mesh, groups, stem, args.output, args.format)
+    export_splits(mesh, groups, stem, args.output, args.format, args.min_faces)
     if not args.no_preview:
         export_preview(mesh, groups, stem, args.output)
     logger.info("Done. %d colour file(s) in %s/", len(groups), args.output)
