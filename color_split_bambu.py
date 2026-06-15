@@ -94,38 +94,53 @@ def report(groups, palette, total_faces):
                     ", ".join(f"{c} ({bp.color_name(c)})" for c in unused))
 
 
-def _clean_faces(mesh, faces, min_faces):
-    """Submesh for `faces`, dropping tiny disconnected fragments (< min_faces).
+def _is_junk(comp, min_faces, min_thinness):
+    """A disconnected fragment is junk if it's a tiny speck OR a thin ribbon.
 
-    Surface splitting leaves stray slivers where a paint brush didn't perfectly
-    cover an edge (especially in the unpainted/base group), which show up as
-    little floating specks in the slicer. Removing the small connected
-    components keeps the real parts (e.g. the wings) and drops the confetti.
+    Surface splitting leaves two kinds of artifact, mostly in the unpainted/base
+    group: tiny specks (few faces) and thin *boundary seams* -- sliver ribbons
+    along where two painted colours meet, which look like wispy floating loops.
+    Specks are caught by face count; seams by `area / bbox_diagonal**2`, a
+    scale-invariant "ribbon-ness" that is ~0.5-1 for solid parts but near 0 for
+    a one-triangle-wide strip.
     """
+    if min_faces > 0 and len(comp.faces) < min_faces:
+        return True
+    if min_thinness > 0:
+        ext = comp.bounds[1] - comp.bounds[0]
+        diag = float(np.linalg.norm(ext))
+        if diag > 0 and comp.area / (diag * diag) < min_thinness:
+            return True
+    return False
+
+
+def _clean_faces(mesh, faces, min_faces, min_thinness):
+    """Submesh for `faces`, dropping speck + thin-seam artifact fragments."""
     sub = mesh.submesh([faces], append=True)
-    if min_faces <= 0:
+    if min_faces <= 0 and min_thinness <= 0:
         return sub, 0
     comps = sub.split(only_watertight=False)
-    small = [c for c in comps if len(c.faces) < min_faces]
-    if len(comps) <= 1 or not small:
-        return sub, 0                  # nothing to drop -> return the submesh untouched
-    keep = [c for c in comps if len(c.faces) >= min_faces]
+    if len(comps) <= 1:
+        return sub, 0
+    keep = [c for c in comps if not _is_junk(c, min_faces, min_thinness)]
     if not keep:                       # never drop everything -- keep the largest body
         keep = [max(comps, key=lambda c: len(c.faces))]
+    if len(keep) == len(comps):
+        return sub, 0                  # nothing dropped -> return the submesh untouched
     cleaned = trimesh.util.concatenate(keep) if len(keep) > 1 else keep[0]
     return cleaned, len(comps) - len(keep)
 
 
-def export_splits(mesh, groups, stem, outdir, fmt, min_faces=200):
+def export_splits(mesh, groups, stem, outdir, fmt, min_faces=200, min_thinness=0.05):
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
     written = []
     for g in groups:
-        cleaned, dropped = _clean_faces(mesh, g.faces, min_faces)
+        cleaned, dropped = _clean_faces(mesh, g.faces, min_faces, min_thinness)
         fname = f"{stem}_filament{g.extruder}_{g.name}_{g.color_hex.lstrip('#')}.{fmt}"
         path = out / fname
         cleaned.export(str(path))
-        note = f"  (dropped {dropped} speck bodies <{min_faces} faces)" if dropped else ""
+        note = f"  (dropped {dropped} speck/seam bodies)" if dropped else ""
         logger.info("Exported %s (%d faces)%s", path, len(cleaned.faces), note)
         written.append(path)
     return written
@@ -164,6 +179,9 @@ def main():
     parser.add_argument("--min-faces", type=int, default=200,
                         help="Drop disconnected fragments smaller than this many faces "
                              "(removes tiny speck artifacts; default 200, 0 disables)")
+    parser.add_argument("--min-thinness", type=float, default=0.05,
+                        help="Drop thin ribbon fragments (boundary seams) whose "
+                             "area/bbox_diagonal^2 is below this (default 0.05, 0 disables)")
     args = parser.parse_args()
 
     if not Path(args.input_file).exists():
@@ -179,7 +197,7 @@ def main():
         return
 
     stem = Path(args.input_file).stem
-    export_splits(mesh, groups, stem, args.output, args.format, args.min_faces)
+    export_splits(mesh, groups, stem, args.output, args.format, args.min_faces, args.min_thinness)
     if not args.no_preview:
         export_preview(mesh, groups, stem, args.output)
     logger.info("Done. %d colour file(s) in %s/", len(groups), args.output)

@@ -128,12 +128,19 @@ Outputs are named by colour, e.g. `model_filament2_yellow_FFFF00.stl`, plus a
 split before printing. `--info` also reports palette colours that were defined
 but never actually painted.
 
-Tiny disconnected fragments (< 200 faces) are dropped from each colour to remove
-the stray speck artifacts that surface splitting leaves at paint boundaries
-(mostly in the unpainted/base group). Tune with `--min-faces N` — `0` disables
-it, and a larger value also removes thin boundary seams (keeping only the big
-parts, e.g. just the wings). These splits are open shells, so run your slicer's
-"fix model" / repair on them before printing.
+Surface splitting leaves two kinds of artifact at paint boundaries (mostly in the
+unpainted/base group), and both are removed by default:
+
+- **tiny specks** — fragments under `--min-faces` (default 200).
+- **thin boundary seams** — sliver ribbons along where colours meet, which show up
+  as wispy floating loops. Dropped by `--min-thinness` (default 0.05), a
+  scale-invariant `area / bbox_diagonal**2` that is ~0.5–1 for solid parts but
+  near 0 for a one-triangle-wide strip.
+
+On the bee this reduces the white/base split from 364 bodies to just the 1 wing
+body, while yellow (3 bodies) and black (9 bodies: eyes, antennae, legs, stripes)
+are kept intact. Set either flag to `0` to disable. These splits are open shells,
+so run your slicer's "fix model" / repair on them before printing.
 
 ### Run with Docker (no local Python needed)
 
